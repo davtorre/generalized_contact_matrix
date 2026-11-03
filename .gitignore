@@ -1,0 +1,23 @@
+# Data: raw files are downloaded from Zenodo, processed files are rebuilt by scripts/make_dataset.py
+data/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Virtual environment
+.venv/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Output written by the examples (heatmaps)
+examples/output/
