@@ -116,6 +116,21 @@ class Domain:
         return (f"Domain(domain_names={self.domain_names}, {len(self)} elements: [{shown}]"
                 f"{', fixed' if self.fixed else ''})")
 
+    def pop(self, name : str):
+        # Normalize
+        name = str(name)
+        # Check if name is in the domain:
+        if name not in self.domain_names:
+            raise ValueError(f"{name} not present in this domain. Domain: {self!r}")
+        # Store id
+        removed_name_id = self.domain_names.index(name)
+        # New domain
+        new_domain = self.domain_names.copy()
+        removed_name = new_domain.pop(removed_name_id)
+        new_elements = [el[:removed_name_id] + el[removed_name_id + 1:] for el in self._elements]
+        self.__init__(new_domain, new_elements, self.fixed)
+
+        return removed_name
 
 class Counts:
     """One number per group of a Domain: the vector N (participants, census population, ...).
@@ -465,4 +480,57 @@ class ContactMatrix:
                              "N_part": self.N_part.get(a), "N_cnt": self.N_cont.get(b)})
         return pl.DataFrame(rows, infer_schema_length=None)
 
-            
+    def marginalize(self, part: List[str] = (), cont: List[str] = (), null_as_zero: bool = True) -> "ContactMatrix":
+        # Normalize input
+        part, cont = list(dict.fromkeys(part)), list(dict.fromkeys(cont))
+        # If both are empty, just return to save time
+        if not part and not cont: return self
+        # Validate input
+        for side, names, dom in (("participant", part, self.domain_part),
+                                 ("contact", cont, self.domain_cont)):
+            unknown = [n for n in names if n not in dom.domain_names]
+            if unknown:
+                raise ValueError(f"Unknown {side} names. {unknown} not available in the domain {dom}")
+        # ToDo: implement marginalization on all the features. Implementing the class ALL needed.
+        if (len(part) == len(self.domain_part.domain_names)) or (len(cont) == len(self.domain_cont.domain_names)):
+            raise ValueError("Marginalizing on all the features is not implemented yet.")
+        # Select which column to keep
+        keep_part   = [f'part_{n}' for n in self.domain_part.domain_names if n not in part]
+        keep_cont   = [f'cnt_{n}'  for n in self.domain_cont.domain_names if n not in cont]
+        all_part    = [f'part_{n}' for n in self.domain_part.domain_names]
+        all_cnt     = [f'cnt_{n}'  for n in self.domain_cont.domain_names]
+
+        # Helping function
+        def total(col, null_as_zero):
+            if null_as_zero:
+                return pl.col(col).sum().alias(col)
+            else:
+                return (pl.when(pl.col(col).null_count() == 0)
+                            .then(pl.col(col).sum())
+                            .otherwise(pl.lit(None)) 
+                            .alias(col)
+                        )
+        # Generate dataframe
+        df = self.to_dataframe()
+        # Marginalize ContactMatrix via group_by and sum
+        R = df.group_by(keep_part + keep_cont).agg(pl.col('contacts').sum())
+        # Marginalize Counts
+        N_part = df.select(["N_part"] + all_part).unique().group_by(keep_part).agg(total("N_part", null_as_zero)) # De-duplicate, then sum
+        N_cont = df.select(["N_cnt"]  + all_cnt).unique().group_by(keep_cont).agg(total("N_cnt", null_as_zero) ) # De-duplicate, then sum
+
+        # Assemble the dataframe
+        out_df = R.join(N_part, on = keep_part, how = "left", nulls_equal = True)
+        out_df = out_df.join(N_cont, on = keep_cont, how = "left", nulls_equal = True)
+
+        # Pop domain pieces to reduce domain
+        new_domain_part = self.domain_part.copy()
+        new_domain_cont = self.domain_cont.copy()
+        for p in part:
+            new_domain_part.pop(p)
+        for c in cont:
+            new_domain_cont.pop(c)
+
+        new_cm = ContactMatrix(domain_part = new_domain_part, domain_cont=new_domain_cont,
+                                extend_domain_part=self.extend_domain_part, extend_domain_cont=self.extend_domain_cont)
+        return new_cm.from_dataframe(out_df)
+        
